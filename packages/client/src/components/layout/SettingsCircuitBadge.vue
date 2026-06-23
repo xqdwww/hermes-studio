@@ -83,11 +83,23 @@ import { NTooltip } from 'naive-ui'
 }
 
 .settings-circuit-link {
-  display: inline-flex;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 28px;
+  border-radius: 8px;
   align-items: center;
   margin-left: auto;
   color: inherit;
   text-decoration: none;
+  transition:
+    background-color 0.16s ease,
+    color 0.16s ease;
+
+  &:hover {
+    background: rgba(214, 160, 25, 0.08);
+  }
 }
 
 .settings-circuit-badge--scan {
@@ -145,8 +157,8 @@ import { NTooltip } from 'naive-ui'
 }
 
 .settings-pcb-board {
-  fill: rgba(86, 72, 28, 0.32);
-  stroke: rgba(214, 160, 25, 0.58);
+  fill: rgba(214, 160, 25, 0.045);
+  stroke: rgba(214, 160, 25, 0.46);
   stroke-width: 1;
 }
 
