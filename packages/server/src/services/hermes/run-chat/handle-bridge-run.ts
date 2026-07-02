@@ -36,6 +36,7 @@ import { writeModelRunProfileToken } from './model-run-prompt'
 import type { AuthenticatedUser } from '../../../middleware/user-auth'
 import { ensureHermesRunWorkspace } from './workspace'
 import { observeRunChatPetEvent } from '../pet-state-socket'
+import { completeWorkspaceRunCheckpoint, startWorkspaceRunCheckpoint } from './workspace-diff-tracker'
 
 const BRIDGE_USAGE_FLUSH_DELAY_MS = 200
 const BRIDGE_TITLE_EVENT_POLL_INTERVAL_MS = 500
@@ -117,9 +118,18 @@ function shouldPollBridgeGeneratedTitle(sessionId: string): boolean {
 }
 
 function looksLikeAgentFailure(value: string): boolean {
-  return /\bAPI call failed after\b/i.test(value)
-    || /\bHTTP\s+(?:4\d\d|5\d\d)\b/i.test(value)
-    || /\b(?:401|403|429|500|502|503|504)\b/.test(value) && /\b(?:unauthorized|forbidden|rate limit|unavailable|failed|error)\b/i.test(value)
+  const text = value.replace(/\s+/g, ' ').trim()
+  if (!text) return false
+
+  return /\bAPI call failed after\b/i.test(text)
+    || /\bHTTP\s+(?:4\d\d|5\d\d)\b/i.test(text)
+    || /\b(?:401|403)\b.{0,100}\b(?:unauthorized|forbidden|authentication|auth|invalid api key|permission denied)\b/i.test(text)
+    || /\b(?:unauthorized|forbidden|authentication|auth|invalid api key|permission denied)\b.{0,100}\b(?:401|403)\b/i.test(text)
+    || /\b429\b.{0,100}\b(?:rate limit|too many requests|quota)\b/i.test(text)
+    || /\b(?:rate limit|too many requests|quota)\b.{0,100}\b429\b/i.test(text)
+    || /\b(?:500|502|503|504)\b.{0,100}\b(?:server error|bad gateway|service unavailable|gateway timeout|upstream|provider|request failed|api)\b/i.test(text)
+    || /\b(?:server error|bad gateway|service unavailable|gateway timeout|upstream|provider|request failed|api)\b.{0,100}\b(?:500|502|503|504)\b/i.test(text)
+    || /(?:无可用渠道|渠道不可用|认证失败|鉴权失败|额度不足|余额不足|请求失败|接口调用失败|限流)/i.test(text)
 }
 
 export function bridgeTerminalError(chunk: Pick<AgentBridgeOutput, 'status' | 'error' | 'result'>): string | null {
@@ -129,19 +139,20 @@ export function bridgeTerminalError(chunk: Pick<AgentBridgeOutput, 'status' | 'e
   const resultError = result
     ? stringValue(result.error)
       || stringValue(result.exception)
-      || stringValue(result.message)
     : ''
+  const resultMessage = result ? stringValue(result.message) : ''
   const finalResponse = result ? stringValue(result.final_response) : ''
 
   if (chunk.status === 'error') {
-    return stringValue(chunk.error) || resultError || finalResponse || 'Agent run failed'
+    return stringValue(chunk.error) || resultError || resultMessage || finalResponse || 'Agent run failed'
   }
 
   if (result?.failed === true || result?.completed === false) {
-    return resultError || finalResponse || 'Agent reported failure'
+    return resultError || resultMessage || finalResponse || 'Agent reported failure'
   }
 
-  if (resultError) return resultError
+  if (resultError && looksLikeAgentFailure(resultError)) return resultError
+  if (!finalResponse && resultMessage && looksLikeAgentFailure(resultMessage)) return resultMessage
   if (finalResponse && looksLikeAgentFailure(finalResponse)) return finalResponse
 
   return null
@@ -522,6 +533,15 @@ export async function handleBridgeRun(
       },
     )
     state.runId = started.run_id
+    try {
+      startWorkspaceRunCheckpoint({
+        sessionId: session_id,
+        runId: started.run_id,
+        workspace,
+      })
+    } catch (err) {
+      bridgeLogger.warn({ err, sessionId: session_id, runId: started.run_id }, '[workspace-diff] failed to start run checkpoint')
+    }
     bridgeLogger.info({
       sessionId: session_id,
       runId: started.run_id,
@@ -1343,6 +1363,28 @@ async function applyBridgeChunkAsync(
     profile: state.profile,
   })
   const hadQueuedRunBeforeGoalEvaluation = state.queue.length > 0
+  const eventName = terminalError ? 'run.failed' : 'run.completed'
+  let workspaceRunChange: ReturnType<typeof completeWorkspaceRunCheckpoint> = null
+  try {
+    const change = completeWorkspaceRunCheckpoint({
+      sessionId,
+      runId: chunk.run_id,
+      workspace,
+    })
+    workspaceRunChange = change
+    if (change) {
+      const changePayload = {
+        event: 'workspace.diff.completed',
+        run_id: chunk.run_id,
+        change_id: change.change_id,
+        change,
+      }
+      pushState(sessionMap, sessionId, 'workspace.diff.completed', changePayload)
+      emit('workspace.diff.completed', changePayload)
+    }
+  } catch (err) {
+    bridgeLogger.warn({ err, sessionId, runId: chunk.run_id }, '[workspace-diff] failed to complete run checkpoint')
+  }
   state.isWorking = hadQueuedRunBeforeGoalEvaluation
   state.isAborting = false
   state.profile = hadQueuedRunBeforeGoalEvaluation ? (state.queue[0]?.profile || profile) : undefined
@@ -1350,7 +1392,6 @@ async function applyBridgeChunkAsync(
   state.runId = undefined
   state.activeRunMarker = undefined
   state.events = []
-  const eventName = terminalError ? 'run.failed' : 'run.completed'
   const payload = {
     event: eventName,
     run_id: chunk.run_id,
@@ -1361,6 +1402,7 @@ async function applyBridgeChunkAsync(
     outputTokens: usage.outputTokens,
     contextTokens,
     queue_remaining: state.queue.length,
+    workspace_run_change: workspaceRunChange,
   }
   emit(eventName, payload)
 

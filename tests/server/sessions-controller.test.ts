@@ -106,6 +106,7 @@ vi.mock('../../packages/server/src/services/hermes/model-context', () => ({
 
 vi.mock('../../packages/server/src/services/hermes/hermes-profile', () => ({
   getActiveProfileName: getActiveProfileNameMock,
+  getActiveProfileDir: () => '/tmp/hermes-test/default',
   getProfileDir: (name: string) => `/tmp/hermes-test/${name || 'default'}`,
   listProfileNamesFromDisk: () => ['default', 'travel'],
 }))
@@ -266,6 +267,49 @@ describe('session conversations controller', () => {
       else process.env.WORKSPACE_BASE = originalWorkspaceBase
       vi.doUnmock('fs')
       vi.doUnmock('fs/promises')
+    }
+  })
+
+  it('lists Windows junction-like workspace folders even when their target realpath leaves WORKSPACE_BASE', async () => {
+    const originalPlatform = process.platform
+    const originalWorkspaceBase = process.env.WORKSPACE_BASE
+    const workspaceBase = await mkdtemp(join(tmpdir(), 'hermes-workspace-win-picker-'))
+    const outsideRoot = await mkdtemp(join(tmpdir(), 'hermes-workspace-win-picker-outside-'))
+
+    try {
+      const outsideTarget = join(outsideRoot, 'drive-target')
+      const outsideChild = join(outsideTarget, 'project')
+      const outsideLink = join(workspaceBase, 'DrivesD')
+
+      await mkdir(outsideChild, { recursive: true })
+      await symlink(outsideTarget, outsideLink)
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      process.env.WORKSPACE_BASE = workspaceBase
+
+      const mod = await import('../../packages/server/src/controllers/hermes/sessions')
+      const rootCtx: any = { query: {}, body: null }
+      await mod.listWorkspaceFolders(rootCtx)
+
+      expect(rootCtx.status).toBeUndefined()
+      expect(rootCtx.body.folders).toContainEqual({
+        name: 'DrivesD',
+        path: 'DrivesD',
+        fullPath: outsideLink,
+      })
+
+      const nestedCtx: any = { query: { path: 'DrivesD' }, body: null }
+      await mod.listWorkspaceFolders(nestedCtx)
+
+      expect(nestedCtx.status).toBeUndefined()
+      expect(nestedCtx.body.folders).toEqual([
+        { name: 'project', path: 'DrivesD/project', fullPath: join(outsideLink, 'project') },
+      ])
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform })
+      if (originalWorkspaceBase === undefined) delete process.env.WORKSPACE_BASE
+      else process.env.WORKSPACE_BASE = originalWorkspaceBase
+      await rm(workspaceBase, { recursive: true, force: true })
+      await rm(outsideRoot, { recursive: true, force: true })
     }
   })
 
