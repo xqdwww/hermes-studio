@@ -179,5 +179,9 @@ describe('task engine bridge dispatch', () => {
       },
       profile: 'default',
     }, { timeoutMs: 123 })
+    const call = request.mock.calls[0]?.[0]
+    expect(call.action).toBe('task_engine_runner_dispatch')
+    expect(call.args.action).toBe('full')
+    expect(call.args.action).not.toBe('task_engine_runner_dispatch')
   })
 })
