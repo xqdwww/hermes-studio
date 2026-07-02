@@ -176,6 +176,11 @@ export interface AgentBridgeGoalPause extends AgentBridgeResponse {
   message?: string
 }
 
+export interface AgentBridgeTaskEngineRunnerResult extends AgentBridgeResponse {
+  tool: 'task_engine_runner'
+  result: string
+}
+
 export class AgentBridgeError extends Error {
   response?: unknown
 }
@@ -475,6 +480,14 @@ export class AgentBridgeClient {
       command,
       ...(profile ? { profile } : {}),
     })
+  }
+
+  taskEngineRunner(args: Record<string, unknown>, profile?: string, options: AgentBridgeRequestOptions = {}): Promise<AgentBridgeTaskEngineRunnerResult> {
+    return this.request<AgentBridgeTaskEngineRunnerResult>({
+      action: 'task_engine_runner_dispatch',
+      args,
+      ...(profile ? { profile } : {}),
+    }, options)
   }
 
   switchSessionModel(

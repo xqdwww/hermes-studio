@@ -173,6 +173,9 @@ class BridgeServer:
                 req.get("profile"),
             )
 
+        if action == "task_engine_runner_dispatch":
+            return self._dispatch_task_engine_runner(req, req.get("profile"))
+
         if action == "skills_reload":
             return self._reload_skills(req.get("profile"))
 
@@ -312,6 +315,59 @@ class BridgeServer:
             "ok": True,
             "action": "reload-skills",
             **_jsonable(result),
+        }
+
+    def _dispatch_task_engine_runner(self, req: dict[str, Any], profile: str | None = None) -> dict[str, Any]:
+        args = req.get("args")
+        if not isinstance(args, dict):
+            raise ValueError("args must be an object")
+
+        allowed = {
+            "query",
+            "mode",
+            "action",
+            "research_packet_path",
+            "base_dir",
+            "execution_intent",
+        }
+        unknown = sorted(str(key) for key in args.keys() if str(key) not in allowed)
+        if unknown:
+            raise ValueError(f"unsupported task_engine_runner args: {', '.join(unknown)}")
+
+        query = str(args.get("query") or "").strip()
+        mode = str(args.get("mode") or "").strip().upper().replace("-", "_")
+        action = str(args.get("action") or "").strip().lower().replace("_", "-")
+        allowed_actions = {
+            "full",
+            "dry-run",
+            "simulated-run",
+            "contract",
+            "validate",
+            "render",
+            "agy-preflight",
+            "omlx-preflight",
+            "mechanism-check",
+            "status",
+        }
+        if not query:
+            raise ValueError("query is required")
+        if mode not in {"RESEARCH", "DECISION", "RESEARCH_DECISION"}:
+            raise ValueError("mode must be RESEARCH, DECISION, or RESEARCH_DECISION")
+        if action not in allowed_actions:
+            raise ValueError("unsupported task_engine_runner action")
+        if mode == "DECISION" and action == "full" and not str(args.get("research_packet_path") or "").strip():
+            raise ValueError("research_packet_path is required for DECISION full task_engine_runner dispatch")
+
+        resolved_profile = profile or _worker_profile() or "default"
+        with _profile_env(resolved_profile):
+            from tools.registry import discover_builtin_tools, registry
+
+            discover_builtin_tools()
+            result = registry.dispatch("task_engine_runner", args)
+        return {
+            "ok": True,
+            "tool": "task_engine_runner",
+            "result": result if isinstance(result, str) else json.dumps(result, ensure_ascii=False),
         }
 
     # ───── MCP sub-handlers ─────

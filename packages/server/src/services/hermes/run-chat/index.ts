@@ -10,7 +10,7 @@
 import type { Server, Socket } from 'socket.io'
 import { logger } from '../../logger'
 import { getSystemPrompt } from '../../../lib/llm-prompt'
-import { clearSessionMessages, getSession, getSessionDetail  } from '../../../db/hermes/session-store'
+import { addMessage, clearSessionMessages, createSession, getSession, getSessionDetail, updateSession, updateSessionStats } from '../../../db/hermes/session-store'
 import { getActiveProfileName, getProfileDir, listProfileNamesFromDisk } from '../hermes-profile'
 import { AgentBridgeClient } from '../agent-bridge'
 import { getAgentBridgeManager } from '../agent-bridge/manager'
@@ -18,7 +18,7 @@ import { redactAgentBridgeError } from '../agent-bridge/redact'
 import { handleBridgeRun, resumeBridgeRun } from './handle-bridge-run'
 import { handleCodingAgentRun } from './handle-coding-agent-run'
 import { handleAbort } from './abort'
-import { getOrCreateSession } from './compression'
+import { getOrCreateSession, pushState } from './compression'
 import { loadSessionStateFromDb, resolveRunSource } from './load-state'
 import { handleSessionCommand, isSessionCommand, parseSessionCommand } from './session-command'
 import { contentBlocksToString } from './content-blocks'
@@ -26,6 +26,12 @@ import type { ContentBlock, QueuedRun, SessionState } from './types'
 import { authenticateUserToken, isAuthEnabled, type AuthenticatedUser } from '../../../middleware/user-auth'
 import { userCanAccessProfile } from '../../../db/hermes/users-store'
 import { observeRunChatPetEvent } from '../pet-state-socket'
+import {
+  detectTaskEngineIntercept,
+  renderTaskEngineInterceptMarkdown,
+  taskEngineTimeoutMs,
+  type TaskEngineRunnerRequest,
+} from './task-engine-intercept'
 
 export type { ContentBlock } from './types'
 
@@ -410,6 +416,18 @@ export class ChatRunSocket {
     if (data.session_id && isBridgeRunSource(source) && isSessionCommand(data.input) && data.allow_command_passthrough !== true) return
 
     if (!isCodingAgentExecution(source, data)) {
+      const taskEngineIntercept = detectTaskEngineIntercept(data.input)
+      if (taskEngineIntercept.kind === 'invalid') {
+        this.failTaskEngineIntercept(socket, data.session_id, taskEngineIntercept.error)
+        return
+      }
+      if (taskEngineIntercept.kind === 'valid') {
+        await this.handleTaskEngineIntercept(socket, data, profile, taskEngineIntercept.request, skipUserMessage)
+        return
+      }
+    }
+
+    if (!isCodingAgentExecution(source, data)) {
       const bridgeReady = await ensureBridgeReadyForChatRun()
       if (!bridgeReady.ok) {
         let shouldDequeueNext = false
@@ -470,6 +488,207 @@ export class ChatRunSocket {
       profile,
       this.sessionMap,
     )
+  }
+
+  private failTaskEngineIntercept(socket: Socket, sessionId: string | undefined, error: string) {
+    if (sessionId) {
+      const state = this.sessionMap.get(sessionId)
+      if (state) {
+        state.isWorking = false
+        state.isAborting = false
+        state.profile = undefined
+        state.runId = undefined
+        state.activeRunMarker = undefined
+        state.events = []
+      }
+    }
+    socket.emit('run.failed', {
+      event: 'run.failed',
+      session_id: sessionId,
+      error,
+      deterministic_intercept: true,
+      model_bypassed: true,
+    })
+  }
+
+  private async handleTaskEngineIntercept(
+    socket: Socket,
+    data: {
+      input: string | ContentBlock[]
+      display_input?: string | ContentBlock[] | null
+      display_role?: 'user' | 'command'
+      storage_message?: string
+      session_id?: string
+      workspace?: string | null
+      source?: string
+      queue_id?: string
+      peerExcludeSocketId?: string
+    },
+    profile: string,
+    request: TaskEngineRunnerRequest,
+    skipUserMessage = false,
+  ) {
+    const sessionId = data.session_id
+    if (!sessionId) {
+      socket.emit('run.failed', {
+        event: 'run.failed',
+        error: 'session_id is required for task_engine_runner intercept',
+        deterministic_intercept: true,
+        model_bypassed: true,
+      })
+      return
+    }
+
+    const bridgeReady = await ensureBridgeReadyForChatRun()
+    if (!bridgeReady.ok) {
+      this.failTaskEngineIntercept(socket, sessionId, `Agent Bridge is not reachable for task_engine_runner intercept: ${bridgeReady.error}`)
+      return
+    }
+
+    const runId = `task_engine_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    const runMarker = runId
+    const now = Math.floor(Date.now() / 1000)
+    const state = getOrCreateSession(this.sessionMap, sessionId)
+    state.isWorking = true
+    state.isAborting = false
+    state.profile = profile
+    state.source = resolveRunSource(data.source, sessionId)
+    state.runId = runId
+    state.activeRunMarker = runMarker
+    state.events = []
+    state.bridgeOutput = ''
+    socket.join(`session:${sessionId}`)
+
+    const displayInput = data.display_input === undefined ? data.input : data.display_input
+    const inputStr = displayInput == null ? '' : contentBlocksToString(displayInput)
+    const storageInputStr = data.storage_message !== undefined ? data.storage_message : inputStr
+    const displayRole = data.display_role === 'command' ? 'command' : 'user'
+
+    if (!getSession(sessionId)) {
+      const preview = inputStr.replace(/[\r\n]/g, ' ').substring(0, 100)
+      createSession({
+        id: sessionId,
+        profile,
+        source: 'cli',
+        agent: 'task_engine_runner',
+        model: 'task_engine_runner',
+        provider: 'deterministic',
+        title: preview,
+        workspace: data.workspace || undefined,
+      })
+    } else {
+      updateSession(sessionId, {
+        model: 'task_engine_runner',
+        provider: 'deterministic',
+        last_active: now,
+      } as any)
+    }
+
+    if (!skipUserMessage && displayInput !== null) {
+      const userMessageId = addMessage({
+        session_id: sessionId,
+        role: displayRole,
+        content: storageInputStr,
+        timestamp: now,
+      })
+      state.messages.push({
+        id: userMessageId || state.messages.length + 1,
+        session_id: sessionId,
+        runMarker,
+        role: displayRole,
+        content: storageInputStr,
+        timestamp: now,
+      })
+      const peerTarget = data.peerExcludeSocketId
+        ? this.nsp.to(`session:${sessionId}`).except(data.peerExcludeSocketId)
+        : socket.to(`session:${sessionId}`)
+      peerTarget.emit('run.peer_user_message', {
+        event: 'run.peer_user_message',
+        session_id: sessionId,
+        message: {
+          id: data.queue_id || userMessageId,
+          role: displayRole,
+          content: inputStr,
+          timestamp: now,
+        },
+      })
+    }
+
+    const startedPayload = {
+      event: 'run.started',
+      run_id: runId,
+      queue_length: state.queue.length || 0,
+      deterministic_intercept: true,
+      model_bypassed: true,
+      intercepted_mode: request.mode,
+      task_engine_runner_action: request.action,
+    }
+    pushState(this.sessionMap, sessionId, 'run.started', startedPayload)
+    this.emitToSession(socket, sessionId, 'run.started', startedPayload)
+
+    try {
+      logger.info('[chat-run-socket][task-engine-intercept] mode=%s action=%s session=%s',
+        request.mode, request.action, sessionId)
+      const result = await this.bridge.taskEngineRunner(request as unknown as Record<string, unknown>, profile, {
+        timeoutMs: taskEngineTimeoutMs(request.action),
+      })
+      const markdown = renderTaskEngineInterceptMarkdown({
+        request,
+        result: result.result,
+      })
+      const doneAt = Math.floor(Date.now() / 1000)
+      const assistantId = addMessage({
+        session_id: sessionId,
+        role: 'assistant',
+        content: markdown,
+        timestamp: doneAt,
+        finish_reason: 'stop',
+      })
+      state.messages.push({
+        id: assistantId || state.messages.length + 1,
+        session_id: sessionId,
+        runMarker,
+        role: 'assistant',
+        content: markdown,
+        timestamp: doneAt,
+        finish_reason: 'stop',
+      })
+      state.bridgeOutput = markdown
+      this.emitToSession(socket, sessionId, 'message.delta', {
+        event: 'message.delta',
+        run_id: runId,
+        delta: markdown,
+        output: markdown,
+      })
+      updateSessionStats(sessionId)
+      this.emitToSession(socket, sessionId, 'run.completed', {
+        event: 'run.completed',
+        run_id: runId,
+        output: markdown,
+        deterministic_intercept: true,
+        model_bypassed: true,
+        queue_remaining: state.queue.length,
+      })
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      this.emitToSession(socket, sessionId, 'run.failed', {
+        event: 'run.failed',
+        run_id: runId,
+        error,
+        deterministic_intercept: true,
+        model_bypassed: true,
+        queue_remaining: state.queue.length,
+      })
+    } finally {
+      const hasQueued = state.queue.length > 0
+      state.isWorking = hasQueued
+      state.isAborting = false
+      state.profile = hasQueued ? state.queue[0]?.profile || profile : undefined
+      state.runId = undefined
+      state.activeRunMarker = undefined
+      state.events = []
+      if (hasQueued) this.dequeueNextQueuedRun(socket, sessionId, profile)
+    }
   }
 
   // --- Resume ---
