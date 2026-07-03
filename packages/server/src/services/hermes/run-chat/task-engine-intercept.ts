@@ -49,7 +49,26 @@ function normalizeText(value: string): string {
   return value.replace(/\r\n/g, '\n').trim()
 }
 
+function hasNegatedLaunchIntent(text: string): boolean {
+  return /(?:不要|别|不)\s*(?:启动|运行|跑|执行|开始)/.test(text)
+    || /\b(?:no\s+run|do\s+not\s+(?:run|start|execute)|don['’]t\s+(?:run|start|execute))\b/i.test(text)
+}
+
+function hasExplicitLaunchIntent(text: string): boolean {
+  if (hasNegatedLaunchIntent(text)) return false
+  return /(?:启动|运行|跑|执行|开始)(?!目录)/.test(text)
+    || /(?:^|[\s,.;:，。；：])(?:start|run|execute)(?:[\s,.;:，。；：]|$)/i.test(text)
+}
+
+function hasAuditDiagnosticContext(text: string): boolean {
+  if (hasNegatedLaunchIntent(text)) return true
+  return /(?:审计|检查|诊断|已存在|已有|运行目录|不要启动任何新任务|不要运行任何管线)/.test(text)
+    || /\b(?:audit|check|diagnos(?:e|is|tic)|existing\s+run|run_dir|no\s+new\s+task)\b/i.test(text)
+}
+
 function hasTaskEngineDispatchMarker(text: string): boolean {
+  if (!hasExplicitLaunchIntent(text)) return false
+  if (hasAuditDiagnosticContext(text)) return false
   if (/\btask_engine_runner\b/i.test(text)) return true
   if (/\btask[-_\s]?engine(?:[-_\s]?runner)?\b/i.test(text)) return true
   const structuredMode = new RegExp(String.raw`(?:^|\n)\s*mode\s*[:=：]\s*${MODE_PATTERN}\b`, 'i').test(text)
@@ -96,11 +115,11 @@ function parseAction(text: string): TaskEngineAction | 'smoke' | null {
 
 function parsePathAfterLabel(text: string, label: RegExp): string | undefined {
   const match = text.match(label)
-  const value = match?.[1]?.trim()
+  const value = match?.[1]?.trim().replace(/^[`'"]|[`'"]$/g, '').replace(/[.。；;，,]+$/g, '')
   return value || undefined
 }
 
-function parseResearchPacketPath(text: string): string | undefined {
+function parseResearchPacketPathCandidate(text: string): string | undefined {
   return parsePathAfterLabel(text, /research_packet_path\s*(?:是|为)?\s*[:=：]?\s*([^\s"'`，。；;、]+)/i)
     || parsePathAfterLabel(text, /(?:Stage A packet|research evidence packet|research_evidence_packet)\s*(?:是|为)?\s*[:：]?\s*\n?\s*([^\s"'`，。；;、]+research_evidence_packet\.md)/i)
     || parsePathAfterLabel(text, new RegExp(String.raw`(?:research\s+packet|研究包路径|研究包|research\s+packet\s+path|packet)\s*(?:是|为|:|：)?\s*(${LOCAL_ABSOLUTE_PATH_PATTERN})`, 'i'))
@@ -112,6 +131,10 @@ function parseArtifactDir(text: string): string | undefined {
 
 function isLocalAbsolutePath(value: string | undefined): value is string {
   return typeof value === 'string' && /^\//.test(value.trim())
+}
+
+function isResearchEvidencePacketPath(value: string | undefined): value is string {
+  return isLocalAbsolutePath(value) && /(?:^|\/)research_evidence_packet\.md$/i.test(value.trim())
 }
 
 function cleanQuery(value: string | undefined): string | undefined {
@@ -151,10 +174,14 @@ export function detectTaskEngineIntercept(input: string | ContentBlock[]): TaskE
     return { kind: 'invalid', text, error: 'task_engine_runner intercept does not allow smoke actions' }
   }
 
-  const researchPacketPath = parseResearchPacketPath(text)
-  if (researchPacketPath && !isLocalAbsolutePath(researchPacketPath)) {
+  const researchPacketPathCandidate = parseResearchPacketPathCandidate(text)
+  if (researchPacketPathCandidate && !isLocalAbsolutePath(researchPacketPathCandidate)) {
     return { kind: 'invalid', text, error: 'research_packet_path must be a local absolute path' }
   }
+  if (researchPacketPathCandidate && !isResearchEvidencePacketPath(researchPacketPathCandidate)) {
+    return { kind: 'invalid', text, error: 'research_packet_path must point to research_evidence_packet.md' }
+  }
+  const researchPacketPath = isResearchEvidencePacketPath(researchPacketPathCandidate) ? researchPacketPathCandidate : undefined
   if (mode === 'DECISION' && action === 'full' && !researchPacketPath) {
     return { kind: 'invalid', text, error: 'research_packet_path is required for DECISION full task_engine_runner intercept' }
   }

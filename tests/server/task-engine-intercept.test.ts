@@ -4,11 +4,13 @@ import { AgentBridgeClient } from '../../packages/server/src/services/hermes/age
 import { detectTaskEngineIntercept } from '../../packages/server/src/services/hermes/run-chat/task-engine-intercept'
 
 const STAGE_A_PACKET = '/Users/xqdwww/Workspace/AI_Core/hermes-agent-research-decision/.hermes_task_engine_runs/1782891050_research_research_l1_l5/L5_deepseek_acceptance/research_evidence_packet.md'
+const DECISION_RUN_DIR = '/Users/xqdwww/Workspace/AI_Core/hermes-agent-research-decision/.hermes_task_engine_runs/1783035113_decision_decision_full'
+const FINAL_REPORT = `${DECISION_RUN_DIR}/final_controller_report/final_decision_report.md`
 
 describe('task engine chat intercept', () => {
   it('recognizes Chinese natural language DECISION full example 1', () => {
     const result = detectTaskEngineIntercept(
-      `跑一下 ADHD Golden Case 的 DECISION full 稳定性复跑，使用这个 research packet：${STAGE_A_PACKET}。问题是：AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策 — 稳定性复跑审计。`,
+      `跑一下 ADHD Golden Case 的 DECISION full 稳定性复跑，使用这个 research packet：${STAGE_A_PACKET}。问题是：AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策。`,
     )
 
     expect(result.kind).toBe('valid')
@@ -16,7 +18,7 @@ describe('task engine chat intercept', () => {
     expect(result.request).toMatchObject({
       mode: 'DECISION',
       action: 'full',
-      query: 'AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策 — 稳定性复跑审计。',
+      query: 'AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策。',
       research_packet_path: STAGE_A_PACKET,
       execution_intent: 'production_full_async',
     })
@@ -24,7 +26,7 @@ describe('task engine chat intercept', () => {
 
   it('recognizes Chinese natural language DECISION full example 2', () => {
     const result = detectTaskEngineIntercept(
-      `用 task_engine_runner 跑 DECISION full。query 是：AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策 — 稳定性复跑审计。research_packet_path 是：${STAGE_A_PACKET}。`,
+      `用 task_engine_runner 跑 DECISION full。query 是：AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策。research_packet_path 是：${STAGE_A_PACKET}。`,
     )
 
     expect(result.kind).toBe('valid')
@@ -32,7 +34,23 @@ describe('task engine chat intercept', () => {
     expect(result.request).toMatchObject({
       mode: 'DECISION',
       action: 'full',
-      query: 'AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策 — 稳定性复跑审计。',
+      query: 'AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策。',
+      research_packet_path: STAGE_A_PACKET,
+      execution_intent: 'production_full_async',
+    })
+  })
+
+  it('recognizes English run DECISION full text', () => {
+    const result = detectTaskEngineIntercept(
+      `Run DECISION full with research_packet_path: ${STAGE_A_PACKET}. query: AI information environment ADHD structural reversal.`,
+    )
+
+    expect(result.kind).toBe('valid')
+    if (result.kind !== 'valid') return
+    expect(result.request).toMatchObject({
+      mode: 'DECISION',
+      action: 'full',
+      query: 'AI information environment ADHD structural reversal.',
       research_packet_path: STAGE_A_PACKET,
       execution_intent: 'production_full_async',
     })
@@ -57,6 +75,7 @@ describe('task engine chat intercept', () => {
   it('recognizes explicit DECISION full dispatch from ordinary chat text', () => {
     const result = detectTaskEngineIntercept(`
 这是一个 DECISION production full-run 任务。请走 live Hermes task_engine_runner full。
+请运行这个任务。
 
 research_packet_path:
 ${STAGE_A_PACKET}
@@ -82,7 +101,7 @@ AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决
   })
 
   it('generates a legal RESEARCH full runner request', () => {
-    const result = detectTaskEngineIntercept('mode=RESEARCH\naction=full\n请走 task_engine_runner，主题：B2B SaaS GTM 决策。')
+    const result = detectTaskEngineIntercept('mode=RESEARCH\naction=full\n请运行 task_engine_runner，主题：B2B SaaS GTM 决策。')
     expect(result.kind).toBe('valid')
     if (result.kind !== 'valid') return
     expect(result.request).toMatchObject({
@@ -94,7 +113,7 @@ AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决
   })
 
   it('returns a clear error when DECISION full is missing research_packet_path', () => {
-    const result = detectTaskEngineIntercept('mode=DECISION\naction=full\n请走 task_engine_runner。query 是：稳定性复跑审计。')
+    const result = detectTaskEngineIntercept('mode=DECISION\naction=full\n请运行 task_engine_runner。query 是：稳定性复跑。')
     expect(result.kind).toBe('invalid')
     if (result.kind !== 'invalid') return
     expect(result.error).toContain('research_packet_path is required')
@@ -108,10 +127,49 @@ AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决
   })
 
   it('requires research_packet_path to be a local absolute path', () => {
-    const result = detectTaskEngineIntercept('用 task_engine_runner 跑 DECISION full。query 是：稳定性复跑审计。research_packet_path 是：relative/research_evidence_packet.md。')
+    const result = detectTaskEngineIntercept('用 task_engine_runner 跑 DECISION full。query 是：稳定性复跑。research_packet_path 是：relative/research_evidence_packet.md。')
     expect(result.kind).toBe('invalid')
     if (result.kind !== 'invalid') return
     expect(result.error).toContain('local absolute path')
+  })
+
+  it('does not intercept audit of an existing run_dir', () => {
+    const result = detectTaskEngineIntercept(`请只读审计这个已经存在的运行目录：${DECISION_RUN_DIR}`)
+    expect(result).toEqual({ kind: 'none' })
+  })
+
+  it('does not intercept prompts that forbid starting new tasks', () => {
+    const result = detectTaskEngineIntercept(`不要启动任何新任务，不要运行任何管线，请检查 ${FINAL_REPORT}`)
+    expect(result).toEqual({ kind: 'none' })
+  })
+
+  it('does not intercept task_engine_runner diagnostics', () => {
+    const result = detectTaskEngineIntercept('检查 task_engine_runner 为什么返回 blocked')
+    expect(result).toEqual({ kind: 'none' })
+  })
+
+  it('does not intercept research_packet_path correctness questions', () => {
+    const result = detectTaskEngineIntercept(`这个 research_packet_path 是不是正确？${STAGE_A_PACKET}`)
+    expect(result).toEqual({ kind: 'none' })
+  })
+
+  it('does not treat a decision_full run directory as a research packet', () => {
+    const result = detectTaskEngineIntercept(`用 task_engine_runner 跑 DECISION full。query 是：稳定性复跑。research_packet_path 是：${DECISION_RUN_DIR}。`)
+    expect(result.kind).toBe('invalid')
+    if (result.kind !== 'invalid') return
+    expect(result.error).toContain('research_evidence_packet.md')
+  })
+
+  it('does not treat final_decision_report.md as a research packet', () => {
+    const result = detectTaskEngineIntercept(`用 task_engine_runner 跑 DECISION full。query 是：稳定性复跑。research_packet_path 是：${FINAL_REPORT}。`)
+    expect(result.kind).toBe('invalid')
+    if (result.kind !== 'invalid') return
+    expect(result.error).toContain('research_evidence_packet.md')
+  })
+
+  it('does not intercept negated DECISION full audit prompts', () => {
+    const result = detectTaskEngineIntercept(`不要启动 DECISION full，只审计已有 run_dir：${DECISION_RUN_DIR}`)
+    expect(result).toEqual({ kind: 'none' })
   })
 
   it('does not intercept weak decision discussion', () => {
@@ -120,7 +178,7 @@ AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决
   })
 
   it('rejects smoke actions instead of restoring legacy task-engine paths', () => {
-    const result = detectTaskEngineIntercept('mode=DECISION\naction=smoke-decision-final\n请走 task_engine_runner。')
+    const result = detectTaskEngineIntercept('mode=DECISION\naction=smoke-decision-final\n请运行 task_engine_runner。')
     expect(result.kind).toBe('invalid')
     if (result.kind !== 'invalid') return
     expect(result.error).toContain('does not allow smoke')
