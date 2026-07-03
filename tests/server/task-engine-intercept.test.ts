@@ -18,7 +18,7 @@ describe('task engine chat intercept', () => {
       action: 'full',
       query: 'AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策 — 稳定性复跑审计。',
       research_packet_path: STAGE_A_PACKET,
-      execution_intent: 'production_full',
+      execution_intent: 'production_full_async',
     })
   })
 
@@ -34,7 +34,7 @@ describe('task engine chat intercept', () => {
       action: 'full',
       query: 'AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策 — 稳定性复跑审计。',
       research_packet_path: STAGE_A_PACKET,
-      execution_intent: 'production_full',
+      execution_intent: 'production_full_async',
     })
   })
 
@@ -50,7 +50,7 @@ describe('task engine chat intercept', () => {
       action: 'full',
       query: 'AI 信息环境下 ADHD 儿童特征的未来结构性反转。',
       research_packet_path: STAGE_A_PACKET,
-      execution_intent: 'production_full',
+      execution_intent: 'production_full_async',
     })
   })
 
@@ -71,7 +71,7 @@ AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决
       mode: 'DECISION',
       action: 'full',
       research_packet_path: STAGE_A_PACKET,
-      execution_intent: 'production_full',
+      execution_intent: 'production_full_async',
     })
     expect(result.request.query).toBe('AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决策')
   })
@@ -177,6 +177,7 @@ describe('task engine bridge dispatch', () => {
         action: 'full',
         execution_intent: 'production_full',
       },
+      timeout: 1,
       profile: 'default',
     }, { timeoutMs: 123 })
     const call = request.mock.calls[0]?.[0]

@@ -20,7 +20,7 @@ export interface TaskEngineRunnerRequest {
   action: TaskEngineAction
   research_packet_path?: string
   base_dir?: string
-  execution_intent?: 'production_full' | 'dry_run' | 'mechanism_test'
+  execution_intent?: 'production_full' | 'production_full_async' | 'dry_run' | 'mechanism_test'
 }
 
 export type TaskEngineIntercept =
@@ -166,7 +166,7 @@ export function detectTaskEngineIntercept(input: string | ContentBlock[]): TaskE
 
   const baseDir = parseArtifactDir(text)
   const executionIntent = action === 'full'
-    ? 'production_full'
+    ? (mode === 'DECISION' ? 'production_full_async' : 'production_full')
     : action === 'dry-run'
       ? 'dry_run'
       : action === 'mechanism-check'

@@ -328,6 +328,10 @@ class BridgeServer:
             "action",
             "research_packet_path",
             "base_dir",
+            "artifact_dir",
+            "job_id",
+            "run_id",
+            "run",
             "execution_intent",
         }
         unknown = sorted(str(key) for key in args.keys() if str(key) not in allowed)
@@ -349,7 +353,7 @@ class BridgeServer:
             "mechanism-check",
             "status",
         }
-        if not query:
+        if not query and action not in {"status", "validate", "render"}:
             raise ValueError("query is required")
         if mode not in {"RESEARCH", "DECISION", "RESEARCH_DECISION"}:
             raise ValueError("mode must be RESEARCH, DECISION, or RESEARCH_DECISION")

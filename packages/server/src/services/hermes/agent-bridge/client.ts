@@ -483,9 +483,13 @@ export class AgentBridgeClient {
   }
 
   taskEngineRunner(args: Record<string, unknown>, profile?: string, options: AgentBridgeRequestOptions = {}): Promise<AgentBridgeTaskEngineRunnerResult> {
+    const timeoutSeconds = options.timeoutMs && options.timeoutMs > 0
+      ? Math.ceil(options.timeoutMs / 1000)
+      : undefined
     return this.request<AgentBridgeTaskEngineRunnerResult>({
       action: 'task_engine_runner_dispatch',
       args,
+      ...(timeoutSeconds ? { timeout: timeoutSeconds } : {}),
       ...(profile ? { profile } : {}),
     }, options)
   }
