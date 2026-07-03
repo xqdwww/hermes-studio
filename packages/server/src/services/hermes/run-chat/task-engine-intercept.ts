@@ -50,7 +50,7 @@ function normalizeText(value: string): string {
 }
 
 function hasNegatedLaunchIntent(text: string): boolean {
-  return /(?:不要|别|不)\s*(?:启动|运行|跑|执行|开始)/.test(text)
+  return /(?:不要|别|不)\s*(?:启动|运行|跑|执行|开始|调用)/.test(text)
     || /\b(?:no\s+run|do\s+not\s+(?:run|start|execute)|don['’]t\s+(?:run|start|execute))\b/i.test(text)
 }
 
@@ -62,8 +62,10 @@ function hasExplicitLaunchIntent(text: string): boolean {
 
 function hasAuditDiagnosticContext(text: string): boolean {
   if (hasNegatedLaunchIntent(text)) return true
-  return /(?:审计|检查|诊断|已存在|已有|运行目录|不要启动任何新任务|不要运行任何管线)/.test(text)
+  const hasResearchPacketLabel = /(?:research_packet_path|research\s+packet|研究包路径|研究包)/i.test(text)
+  return /(?:只读检查|审计|检查|诊断|已存在|已有|已存在的运行目录|已有运行目录|运行目录|不要启动任何新任务|不要运行任何管线)/.test(text)
     || /\b(?:audit|check|diagnos(?:e|is|tic)|existing\s+run|run_dir|no\s+new\s+task)\b/i.test(text)
+    || (!hasResearchPacketLabel && /\b(?:final_controller_report|final_decision_report)\b/i.test(text))
 }
 
 function hasTaskEngineDispatchMarker(text: string): boolean {

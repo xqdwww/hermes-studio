@@ -143,6 +143,17 @@ AI 信息环境下，ADHD 儿童特征的未来结构性反转与长期发展决
     expect(result).toEqual({ kind: 'none' })
   })
 
+  it('does not intercept negated read-only inspection of an existing decision run directory', () => {
+    const result = detectTaskEngineIntercept(`
+请只读检查这个已有运行目录，不要启动任何新任务，不要运行 DECISION full，不要调用 task_engine_runner：
+
+${DECISION_RUN_DIR}
+
+请告诉我 final_decision_report.md 是否存在。
+`)
+    expect(result).toEqual({ kind: 'none' })
+  })
+
   it('does not intercept task_engine_runner diagnostics', () => {
     const result = detectTaskEngineIntercept('检查 task_engine_runner 为什么返回 blocked')
     expect(result).toEqual({ kind: 'none' })
