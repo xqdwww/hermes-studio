@@ -670,6 +670,84 @@ assert resp["running_sessions_by_profile"] == {"default": 1}
 `)
   })
 
+  it('routes task engine bridge dispatch to a worker without rewriting runner action', () => {
+    runPython(String.raw`
+${harness}
+
+broker = bridge.BridgeBroker("ipc:///tmp/broker.sock")
+captured = {}
+
+def fake_forward(profile, req, worker_key=None):
+    captured["profile"] = profile
+    captured["worker_key"] = worker_key
+    captured["req"] = req
+    return {"ok": True, "tool": "task_engine_runner"}
+
+broker._forward = fake_forward
+resp = broker.handle({
+    "action": "task_engine_runner_dispatch",
+    "profile": "default",
+    "args": {
+        "query": "AI 信息环境下 ADHD 儿童特征的未来结构性反转",
+        "mode": "DECISION",
+        "action": "full",
+        "research_packet_path": "/tmp/research_evidence_packet.md",
+    },
+})
+
+assert resp["tool"] == "task_engine_runner"
+assert captured["profile"] == "default"
+assert captured["worker_key"] == "default"
+assert captured["req"]["action"] == "task_engine_runner_dispatch"
+assert captured["req"]["args"]["action"] == "full"
+assert captured["req"]["args"]["action"] != "task_engine_runner_dispatch"
+`)
+  })
+
+  it('dispatches task engine worker action to the registered task_engine_runner payload', () => {
+    runPython(String.raw`
+${harness}
+
+registry_mod = types.ModuleType("tools.registry")
+calls = []
+
+class FakeRegistry:
+    def dispatch(self, tool_name, payload):
+        calls.append((tool_name, dict(payload)))
+        return {"status": "ok"}
+
+def discover_builtin_tools():
+    calls.append(("discover_builtin_tools", None))
+
+registry_mod.discover_builtin_tools = discover_builtin_tools
+registry_mod.registry = FakeRegistry()
+sys.modules["tools.registry"] = registry_mod
+
+server = bridge.BridgeServer("ipc:///tmp/unused.sock")
+resp = server.handle({
+    "action": "task_engine_runner_dispatch",
+    "profile": "default",
+    "args": {
+        "query": "AI 信息环境下 ADHD 儿童特征的未来结构性反转",
+        "mode": "DECISION",
+        "action": "full",
+        "research_packet_path": "/tmp/research_evidence_packet.md",
+    },
+})
+
+assert resp["ok"] is True
+assert resp["tool"] == "task_engine_runner"
+assert calls[0] == ("discover_builtin_tools", None)
+tool_name, payload = calls[1]
+assert tool_name == "task_engine_runner"
+assert payload["mode"] == "DECISION"
+assert payload["action"] == "full"
+assert payload["action"] != "task_engine_runner_dispatch"
+assert payload["query"] == "AI 信息环境下 ADHD 儿童特征的未来结构性反转"
+assert payload["research_packet_path"] == "/tmp/research_evidence_packet.md"
+`)
+  })
+
   it('does not start a worker for unloaded broker status checks', () => {
     runPython(String.raw`
 ${harness}

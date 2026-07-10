@@ -5,6 +5,10 @@ import { delimiter, dirname, extname, join, resolve } from 'path'
 import { getWebUiHome } from '../config'
 
 let updateInProgress = false
+
+function hermesUpdateGuardEnabled() {
+  return !['', '0', 'false', 'no', 'off'].includes(String(process.env.HERMES_UPDATE_GUARD || '').trim().toLowerCase())
+}
 const NODE_ENVIRONMENT_MISSING_CODE = 'node_environment_missing'
 
 const PREVIEW_DIR_NAME = 'hermes-web-ui-pereview'
@@ -1018,6 +1022,15 @@ function spawnRestart(port: string) {
 }
 
 export async function handleUpdate(ctx: any) {
+  if (hermesUpdateGuardEnabled()) {
+    ctx.status = 403
+    ctx.body = {
+      success: false,
+      message: 'Direct WebUI update is disabled by hermes-update-guard. Use the guarded backup, shadow worktree, test, reversible cutover workflow instead.',
+    }
+    return
+  }
+
   if (updateInProgress) {
     ctx.status = 409
     ctx.body = {
